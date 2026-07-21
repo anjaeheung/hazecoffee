@@ -397,6 +397,18 @@ function clearLineVisual() {
     if (c.userData.isLine) { c.geometry?.dispose(); overlayGroup.remove(c); }
   }
 }
+function drawRectVisual(a, b, mat) {
+  clearLineVisual();
+  const zTop = maxLayer() * LAYER_EPS + 0.05;
+  const pts = [
+    new THREE.Vector3(a.x, a.y, zTop), new THREE.Vector3(b.x, a.y, zTop),
+    new THREE.Vector3(b.x, b.y, zTop), new THREE.Vector3(a.x, b.y, zTop),
+  ];
+  const loop = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), mat);
+  loop.userData.isLine = true;
+  loop.renderOrder = 5000;
+  overlayGroup.add(loop);
+}
 function showHighlight(pieces, mat = matHighlight) {
   clearHighlight();
   for (const f of pieces) {
@@ -576,6 +588,43 @@ function cutAll(L0, u) {
   return true;
 }
 
+// 네모 영역 오려내기: 사각형 안쪽을 새 조각으로 분리 (나머지는 구멍 뚫린 채 유지)
+function cutRectRegion(a, b) {
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+  const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+  if (x1 - x0 < 0.5 || y1 - y0 < 0.5) return null;
+  const planes = [p => x0 - p.x, p => p.x - x1, p => y0 - p.y, p => p.y - y1]; // g>0 = 바깥
+  const inside = [], outside = [];
+  for (const f of facets) {
+    let curPts = f.pts; // 바깥쪽을 한 변씩 떼어내며 볼록 분할
+    for (const g of planes) {
+      if (curPts.length < 3) break;
+      const gvals = curPts.map(p => g(applyT(f.T, p)));
+      const outPoly = clipPoly(curPts, gvals, true);
+      if (outPoly.length >= 3 && polyArea(outPoly) > MIN_AREA) outside.push({ ...f, pts: outPoly });
+      curPts = clipPoly(curPts, gvals, false);
+    }
+    if (curPts.length >= 3 && polyArea(curPts) > MIN_AREA) inside.push({ ...f, pts: curPts });
+  }
+  if (!inside.length) return null;
+  // 안팎에 걸친 piece만 분리 (전부 안쪽이면 이미 통째 조각이므로 의미 없음)
+  const insidePieces = new Set(inside.map(f => f.pieceId));
+  const outsidePieces = new Set(outside.map(f => f.pieceId));
+  const newIdFor = new Map();
+  const newIds = [];
+  let nid = nextPieceId();
+  for (const pid of insidePieces) {
+    if (outsidePieces.has(pid)) { newIdFor.set(pid, nid); newIds.push(nid); nid++; }
+  }
+  if (!newIds.length) return null;
+  pushUndo();
+  facets = [
+    ...outside,
+    ...inside.map(f => newIdFor.has(f.pieceId) ? { ...f, pieceId: newIdFor.get(f.pieceId) } : f),
+  ];
+  return newIds;
+}
+
 // ---------- 옮기기 ----------
 let moveDrag = null; // { pieceId, start, cur }
 
@@ -614,6 +663,8 @@ function rotatePiece(pieceId, deg) {
 const hint = document.getElementById('hint');
 const dirPanel = document.getElementById('dirPanel');
 const rotPanel = document.getElementById('rotPanel');
+const cutPanel = document.getElementById('cutPanel');
+let cutShape = 'line'; // line | rect
 const btnFold = document.getElementById('btnFold');
 const btnCut = document.getElementById('btnCut');
 const btnMove = document.getElementById('btnMove');
@@ -627,22 +678,25 @@ const HINTS = {
   view: '드래그로 회전 · 휠/핀치로 확대축소',
   fold: '접을 부분을 잡고 끌면 따라 접혀요 — 원하는 곳에서 놓기 (모서리 자석) · 우클릭 회전',
   cut: '드래그로 자를 선을 그으세요 · 우클릭 회전',
+  cutRect: '네모를 드래그로 그리면 그 부분이 뚝 떼어져요 · 우클릭 회전',
   move: '조각을 잡아 끌어서 옮기세요 · 우클릭 회전',
 };
+function cutHint() { return cutShape === 'rect' ? HINTS.cutRect : HINTS.cut; }
 
 function setMode(m) {
   if (foldAnim) return; // 접히는 중엔 무시
   mode = m;
   dirPanel.classList.toggle('hidden', m !== 'fold');
   rotPanel.classList.toggle('hidden', m !== 'move');
+  cutPanel.classList.toggle('hidden', m !== 'cut');
   btnFold.classList.toggle('active', m === 'fold');
   btnCut.classList.toggle('active', m === 'cut');
   btnMove.classList.toggle('active', m === 'move');
   setControlsForTool(m !== 'view');
   canvas.style.cursor = (m === 'fold' || m === 'move') ? 'grab' : (m === 'cut') ? 'crosshair' : 'default';
   hideMarkers(); clearLineVisual(); clearHighlight();
-  foldDrag = null; moveDrag = null;
-  setHint(HINTS[m]);
+  foldDrag = null; moveDrag = null; cutDrag = null;
+  setHint(m === 'cut' ? cutHint() : HINTS[m]);
   if (m === 'fold' || m === 'cut') alignTopDown();
 }
 
@@ -678,6 +732,11 @@ btnLight.addEventListener('click', () => {
 
 dirOverBtn.addEventListener('click', () => { foldDir = 'over'; dirOverBtn.classList.add('active'); dirUnderBtn.classList.remove('active'); });
 dirUnderBtn.addEventListener('click', () => { foldDir = 'under'; dirUnderBtn.classList.add('active'); dirOverBtn.classList.remove('active'); });
+
+const cutLineBtn = document.getElementById('cutLine');
+const cutRectBtn = document.getElementById('cutRect');
+cutLineBtn.addEventListener('click', () => { cutShape = 'line'; cutLineBtn.classList.add('active'); cutRectBtn.classList.remove('active'); setHint(cutHint()); });
+cutRectBtn.addEventListener('click', () => { cutShape = 'rect'; cutRectBtn.classList.add('active'); cutLineBtn.classList.remove('active'); setHint(cutHint()); });
 
 document.getElementById('rotCCW').addEventListener('click', () => {
   if (selectedPiece == null) { setHint('먼저 조각을 클릭/드래그해서 선택하세요'); return; }
@@ -802,9 +861,15 @@ canvas.addEventListener('pointermove', (e) => {
     placeMarker(snapMarkerA, s.point, s.snapped);
   } else if (mode === 'cut' && cutDrag) {
     const s = snapPoint(raw, e);
-    cutDrag.p1 = s.snapped ? s.point : snapAngle(cutDrag.p0, s.point);
-    placeMarker(snapMarkerB, cutDrag.p1, s.snapped);
-    drawLineVisual(cutDrag.p0, cutDrag.p1, matCutLine, matCutDash);
+    if (cutShape === 'rect') {
+      cutDrag.p1 = s.point;
+      placeMarker(snapMarkerB, cutDrag.p1, s.snapped);
+      drawRectVisual(cutDrag.p0, cutDrag.p1, matCutLine);
+    } else {
+      cutDrag.p1 = s.snapped ? s.point : snapAngle(cutDrag.p0, s.point);
+      placeMarker(snapMarkerB, cutDrag.p1, s.snapped);
+      drawLineVisual(cutDrag.p0, cutDrag.p1, matCutLine, matCutDash);
+    }
   } else if (mode === 'cut') {
     const s = snapPoint(raw, e);
     placeMarker(snapMarkerA, s.point, s.snapped);
@@ -827,14 +892,27 @@ canvas.addEventListener('pointerup', (e) => {
     const { p0, p1 } = cutDrag;
     cutDrag = null;
     hideMarkers(); clearLineVisual();
-    const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-    if (len < 0.8) return;
-    const u = { x: (p1.x - p0.x) / len, y: (p1.y - p0.y) / len };
-    if (cutAll(p0, u)) {
-      rebuildScene();
-      setHint('싹둑! ✋ 옮기기로 조각을 움직여보세요');
+    if (cutShape === 'rect') {
+      const newIds = cutRectRegion(p0, p1);
+      if (newIds) {
+        rebuildScene();
+        selectedPiece = newIds[0];
+        setMode('move'); // 바로 집어서 떼어놓을 수 있게
+        highlightSelected();
+        setHint('뚝! 떼어낸 조각을 끌어서 옮겨보세요');
+      } else {
+        setHint('오려낼 부분이 종이 위에 오게 네모를 그려주세요');
+      }
     } else {
-      setHint('선이 종이를 지나야 잘려요');
+      const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      if (len < 0.8) return;
+      const u = { x: (p1.x - p0.x) / len, y: (p1.y - p0.y) / len };
+      if (cutAll(p0, u)) {
+        rebuildScene();
+        setHint('싹둑! ✋ 옮기기로 조각을 움직여보세요');
+      } else {
+        setHint('선이 종이를 지나야 잘려요');
+      }
     }
   } else if (mode === 'move' && moveDrag) {
     const { pieceId, start, cur } = moveDrag;
@@ -869,6 +947,11 @@ window.__fold = {
     const ok = cutAll({ x: x1, y: y1 }, u);
     if (ok) rebuildScene();
     return ok;
+  },
+  cutRect(x0, y0, x1, y1) {
+    const ids = cutRectRegion({ x: x0, y: y0 }, { x: x1, y: y1 });
+    if (ids) rebuildScene();
+    return ids;
   },
   movePiece(pid, dx, dy) { bakeMove(pid, dx, dy); rebuildScene(); },
   rotate(pid, deg) { rotatePiece(pid, deg); rebuildScene(); },
