@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>종이 접기 3D</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="toolbar">
+  <button id="btnFront" title="앞면 이미지 올리기">🖼 앞면</button>
+  <button id="btnBack" title="뒷면 이미지 올리기">🖼 뒷면</button>
+  <span class="sep"></span>
+  <button id="btnFold" title="접기 모드">✂ 접기</button>
+  <button id="btnUndo" title="마지막 접기 취소">↩ 되돌리기</button>
+  <button id="btnReset" title="처음 상태로">⟲ 펴기</button>
+  <button id="btnLight" title="빛에 비추기 (앞뒤 겹쳐보기)">💡 비추기</button>
+</div>
+
+<div id="foldPanel" class="hidden">
+  <div class="dirRow">
+    <button id="dirOver" class="dir active">⬆ 앞으로 접기</button>
+    <button id="dirUnder" class="dir">⬇ 뒤로 접기</button>
+  </div>
+  <div class="sliderRow">
+    <input type="range" id="angle" min="0" max="180" value="0" step="1">
+    <span id="angleLabel">0°</span>
+  </div>
+  <div class="btnRow">
+    <button id="confirmFold" disabled>접기 확정</button>
+    <button id="cancelFold">취소</button>
+  </div>
+</div>
+
+<div id="hint">드래그로 회전 · 휠/핀치로 확대축소</div>
+
+<input type="file" id="fileFront" accept="image/*" hidden>
+<input type="file" id="fileBack" accept="image/*" hidden>
+
+<canvas id="view"></canvas>
+<script type="module" src="main.js"></script>
+</body>
+</html>

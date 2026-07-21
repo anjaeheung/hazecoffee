@@ -1,0 +1,86 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+  background: radial-gradient(ellipse at 50% 30%, #3a3f4b 0%, #23262e 70%, #191b21 100%);
+  touch-action: none;
+}
+
+#view { position: fixed; inset: 0; display: block; }
+
+#toolbar {
+  position: fixed;
+  top: 10px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; gap: 6px; align-items: center;
+  flex-wrap: wrap; justify-content: center;
+  padding: 8px 10px;
+  background: rgba(20, 22, 28, 0.78);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+  max-width: calc(100vw - 16px);
+}
+
+#toolbar button, #foldPanel button {
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.07);
+  color: #e8eaf0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+#toolbar button:hover { background: rgba(255,255,255,0.16); }
+#toolbar button.active { background: #4f7cff; border-color: #6f95ff; }
+#toolbar button:disabled { opacity: .35; cursor: default; }
+#toolbar .sep { width: 1px; height: 22px; background: rgba(255,255,255,0.15); margin: 0 3px; }
+
+#foldPanel {
+  position: fixed;
+  bottom: 56px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px;
+  background: rgba(20, 22, 28, 0.85);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+  width: min(360px, calc(100vw - 24px));
+}
+#foldPanel.hidden { display: none; }
+
+.dirRow { display: flex; gap: 8px; }
+.dirRow .dir { flex: 1; }
+.dirRow .dir.active { background: #4f7cff; border-color: #6f95ff; }
+
+.sliderRow { display: flex; align-items: center; gap: 10px; }
+.sliderRow input[type=range] { flex: 1; accent-color: #4f7cff; }
+#angleLabel { color: #e8eaf0; font-size: 14px; min-width: 44px; text-align: right; }
+
+.btnRow { display: flex; gap: 8px; }
+.btnRow button { flex: 1; }
+#confirmFold:not(:disabled) { background: #38a169; border-color: #48c17e; }
+#confirmFold:disabled { opacity: .4; cursor: default; }
+
+#hint {
+  position: fixed;
+  bottom: 14px; left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  background: rgba(20, 22, 28, 0.6);
+  border-radius: 20px;
+  color: #aeb4c2;
+  font-size: 13px;
+  z-index: 9;
+  white-space: nowrap;
+  max-width: calc(100vw - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
