@@ -111,14 +111,34 @@ function setControlsForDrawing(drawing) {
   }
 }
 
-// 🔄 뒤집기: 카메라를 종이 반대편으로 부드럽게 이동
+// 카메라 극각(polar) 애니메이션 (뒤집기 / 정면 정렬 공용)
+// 주의: THREE.Spherical은 Y축이 극(pole)이라, Z-up 세계에 맞게 쿼터니언으로 축을 맞춰서 계산
 let flipAnim = null;
 const _sph = new THREE.Spherical();
+const _upQ = new THREE.Quaternion();
+const _upQInv = new THREE.Quaternion();
+function getPolar() { // 현재 카메라의 (r, phi, theta) — phi: 0=종이 위, π=종이 아래
+  _upQ.setFromUnitVectors(camera.up, new THREE.Vector3(0, 1, 0));
+  _upQInv.copy(_upQ).invert();
+  const off = camera.position.clone().sub(controls.target).applyQuaternion(_upQ);
+  _sph.setFromVector3(off);
+  return _sph;
+}
+function setPolar(r, phi, theta) {
+  const v = new THREE.Vector3().setFromSphericalCoords(r, phi, theta).applyQuaternion(_upQInv);
+  camera.position.copy(controls.target).add(v);
+}
+function animatePolarTo(phiTarget) {
+  const s = getPolar();
+  flipAnim = { t0: performance.now(), from: s.phi, to: phiTarget, theta: s.theta, r: s.radius };
+}
 function startFlip() {
-  _sph.setFromVector3(camera.position.clone().sub(controls.target));
-  const from = _sph.phi;
-  const to = Math.min(Math.PI - 0.03, Math.max(0.03, Math.PI - from));
-  flipAnim = { t0: performance.now(), from, to, theta: _sph.theta, r: _sph.radius };
+  const s = getPolar();
+  animatePolarTo(Math.min(Math.PI - 0.03, Math.max(0.03, Math.PI - s.phi)));
+}
+function alignTopDown() { // 보고 있던 면을 정면으로
+  const s = getPolar();
+  animatePolarTo(s.phi > Math.PI / 2 ? Math.PI - 0.12 : 0.12);
 }
 
 window.addEventListener('resize', () => {
@@ -272,6 +292,68 @@ function rebuildScene() {
   clearGroup(paperGroup); clearGroup(previewGroup); clearGroup(overlayGroup);
   previewGroup.matrix.identity();
   for (const f of facets) buildFacetInto(paperGroup, f);
+  refreshSnapCache();
+}
+
+// ---------- 스냅 (꼭짓점 · 변 중간점 자석) ----------
+let snapCache = [];
+function refreshSnapCache() {
+  snapCache = [];
+  const seen = new Set();
+  for (const f of facets) {
+    const z = f.layer * LAYER_EPS;
+    const tp = f.pts.map(p => applyT(f.T, p));
+    for (let i = 0; i < tp.length; i++) {
+      const a = tp[i], b = tp[(i + 1) % tp.length];
+      for (const c of [a, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }]) {
+        const key = `${Math.round(c.x * 25)},${Math.round(c.y * 25)}`;
+        if (!seen.has(key)) { seen.add(key); snapCache.push({ x: c.x, y: c.y, z }); }
+      }
+    }
+  }
+}
+
+const SNAP_PX = 20; // 화면 픽셀 기준 스냅 반경
+function snapPoint(p, e) {
+  if (e.shiftKey) return { point: p, snapped: false }; // Shift = 스냅 끄기
+  const rect = canvas.getBoundingClientRect();
+  let best = null, bestD = Infinity;
+  const v = new THREE.Vector3();
+  for (const c of snapCache) {
+    v.set(c.x, c.y, c.z).project(camera);
+    const sx = (v.x + 1) / 2 * rect.width + rect.left;
+    const sy = (-v.y + 1) / 2 * rect.height + rect.top;
+    const d = Math.hypot(sx - e.clientX, sy - e.clientY);
+    if (d < SNAP_PX && d < bestD) { bestD = d; best = c; }
+  }
+  return best ? { point: { x: best.x, y: best.y }, snapped: true } : { point: p, snapped: false };
+}
+function snapAngle(p0, p1) { // 15° 단위 각도 스냅 (끝점이 점 스냅 안 됐을 때)
+  const dx = p1.x - p0.x, dy = p1.y - p0.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.5) return p1;
+  const ang = Math.atan2(dy, dx);
+  const step = Math.PI / 12;
+  const snapped = Math.round(ang / step) * step;
+  if (Math.abs(ang - snapped) < THREE.MathUtils.degToRad(4)) {
+    return { x: p0.x + Math.cos(snapped) * len, y: p0.y + Math.sin(snapped) * len };
+  }
+  return p1;
+}
+
+// 스냅 표시 링
+const snapMarkerMat = new THREE.MeshBasicMaterial({ color: 0x33ff88, side: THREE.DoubleSide, depthTest: false, transparent: true, opacity: 0.95 });
+const snapMarkerA = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.5, 24), snapMarkerMat);
+const snapMarkerB = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.5, 24), snapMarkerMat);
+snapMarkerA.renderOrder = snapMarkerB.renderOrder = 6000;
+snapMarkerA.visible = snapMarkerB.visible = false;
+scene.add(snapMarkerA, snapMarkerB);
+function placeMarker(marker, p, on) {
+  marker.visible = on;
+  if (on) {
+    const zTop = Math.max(...facets.map(f => f.layer)) * LAYER_EPS + 0.06;
+    marker.position.set(p.x, p.y, zTop);
+  }
 }
 
 // ---------- 접기 연산 ----------
@@ -417,12 +499,14 @@ function setMode(m) {
   btnFold.classList.toggle('active', m !== 'view');
   setControlsForDrawing(m === 'draw' || m === 'side');
   canvas.style.cursor = (m === 'draw') ? 'crosshair' : 'default';
+  if (m !== 'draw') { snapMarkerA.visible = snapMarkerB.visible = false; }
   if (m === 'view') {
     setHint('드래그로 회전 · 휠/핀치로 확대축소');
     clearGroup(overlayGroup); highlightSign = 0;
   } else if (m === 'draw') {
-    setHint('드래그로 접을 선 긋기 · 우클릭(두 손가락)으로 회전');
+    setHint('드래그로 선 긋기 (모서리·중간점에 자석 스냅) · 우클릭으로 회전');
     clearGroup(overlayGroup); highlightSign = 0;
+    alignTopDown();
   } else if (m === 'side') {
     setHint('접을 쪽을 클릭하세요 · 우클릭(두 손가락)으로 회전');
   } else if (m === 'angle') {
@@ -544,9 +628,11 @@ let dragStart = null, dragCur = null, downPos = null;
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || !e.isPrimary) return; // 좌클릭/첫 손가락만 (우클릭·두 손가락은 회전)
   if (mode === 'draw') {
-    const p = pointerToTable(e);
-    if (!p) return;
-    dragStart = p; dragCur = p;
+    const raw = pointerToTable(e);
+    if (!raw) return;
+    const s = snapPoint(raw, e);
+    dragStart = s.point; dragCur = s.point;
+    placeMarker(snapMarkerA, s.point, s.snapped);
     canvas.setPointerCapture(e.pointerId);
   } else if (mode === 'side') {
     downPos = { x: e.clientX, y: e.clientY };
@@ -555,10 +641,18 @@ canvas.addEventListener('pointerdown', (e) => {
 
 canvas.addEventListener('pointermove', (e) => {
   if (mode === 'draw' && dragStart) {
-    const p = pointerToTable(e);
-    if (!p) return;
-    dragCur = p;
+    const raw = pointerToTable(e);
+    if (!raw) return;
+    const s = snapPoint(raw, e);
+    dragCur = s.snapped ? s.point : snapAngle(dragStart, s.point);
+    placeMarker(snapMarkerB, dragCur, s.snapped);
     drawFoldLineVisual(dragStart, dragCur, true);
+  } else if (mode === 'draw') {
+    // 긋기 전: 스냅 후보 미리 표시
+    const raw = pointerToTable(e);
+    if (!raw) return;
+    const s = snapPoint(raw, e);
+    placeMarker(snapMarkerA, s.point, s.snapped);
   } else if (mode === 'side') {
     const p = pointerToTable(e);
     if (p) updateHighlight(sideOfPoint(p));
@@ -569,6 +663,7 @@ canvas.addEventListener('pointerup', (e) => {
   if (mode === 'draw' && dragStart) {
     const p0 = dragStart, p1 = dragCur;
     dragStart = dragCur = null;
+    snapMarkerA.visible = snapMarkerB.visible = false;
     const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
     if (len < 0.8) {
       clearGroup(overlayGroup);
@@ -629,6 +724,19 @@ window.__fold = {
   },
   setLight(on) { lightMode = on; applyMaterialMode(); },
   snapshot() { return structuredClone(facets); },
+  camPos() { return camera.position.toArray().map(v => Math.round(v * 10) / 10); },
+  flip() { startFlip(); },
+  flipNow() { // 애니메이션 없이 즉시 (테스트용)
+    startFlip();
+    if (flipAnim) { setPolar(flipAnim.r, flipAnim.to, flipAnim.theta); flipAnim = null; }
+  },
+  alignNow() {
+    alignTopDown();
+    if (flipAnim) { setPolar(flipAnim.r, flipAnim.to, flipAnim.theta); flipAnim = null; }
+  },
+  snapAt(x, y) { // 스냅 검증용: 해당 좌표 근처 스냅 후보 반환
+    return snapCache.filter(c => Math.hypot(c.x - x, c.y - y) < 2);
+  },
 };
 
 // ---------- 시작 ----------
@@ -642,8 +750,7 @@ function animate() {
     const k = Math.min(1, (performance.now() - flipAnim.t0) / 500);
     const e = k < 0.5 ? 2 * k * k : -1 + (4 - 2 * k) * k; // easeInOut
     const phi = flipAnim.from + (flipAnim.to - flipAnim.from) * e;
-    camera.position.copy(controls.target)
-      .add(new THREE.Vector3().setFromSphericalCoords(flipAnim.r, phi, flipAnim.theta));
+    setPolar(flipAnim.r, phi, flipAnim.theta);
     if (k >= 1) flipAnim = null;
   }
   controls.update();
