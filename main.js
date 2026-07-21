@@ -12,7 +12,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const LAYER_EPS = 0.1;        // 층 간격 (종이 두께)
 const MIN_AREA = 0.02;        // 이 미만 조각은 버림
 const BASE_H = 29.7;          // 종이 높이 고정(A4), 폭은 이미지 비율 따름
-const FOLD_ANIM_MS = 380;     // 접기 애니메이션 시간
+const FOLD_ANIM_MS = 150;     // 놓은 뒤 정착 애니메이션 시간
 
 let paperW = 21.0;
 let paperH = BASE_H;
@@ -57,7 +57,7 @@ function polyArea(pts) {
   }
   return Math.abs(s) / 2;
 }
-// Sutherland–Hodgman: gvals[i] 부호 기준으로 반평면 클리핑
+// Sutherland-Hodgman: gvals[i] 부호 기준으로 반평면 클리핑
 function clipPoly(pts, gvals, keepPositive) {
   const out = [];
   const n = pts.length;
@@ -299,7 +299,7 @@ function clearGroup(g) {
   }
 }
 
-// excludePiece: 해당 조각은 previewGroup으로 (애니메이션용)
+// excludeTest: 해당 facet은 previewGroup으로 (애니메이션용)
 function rebuildScene(excludeTest = null) {
   clearGroup(paperGroup); clearGroup(previewGroup); clearGroup(overlayGroup);
   previewGroup.matrix.identity();
@@ -464,53 +464,68 @@ function commitFoldPieces(stay, fold, keep, L0, u, dir) {
   facets = out;
 }
 
-// ---------- 접기 제스처 (잡아서 끌기) ----------
-// P(잡은 점) → Q(놓을 점): 접는 선 = PQ의 수직이등분선, P쪽이 넘어감
-let foldDrag = null; // { P, pieceId }
-let foldAnim = null; // { t0, stay, fold, keep, L0, u, dir, sign }
+// ---------- 접기 제스처 (잡아서 끌기 — 실시간으로 따라 접힘) ----------
+// P(잡은 점) → Q(현재 커서): 접는 선 = PQ의 수직이등분선, P쪽 플랩이 커서를 따라 넘어옴
+let foldDrag = null;        // { P, pieceId }
+let foldAnim = null;        // { t0, fromK, stay, fold, keep, L0, u, dir, sign } — 놓은 뒤 정착 애니메이션
+const DRAG_K = 0.93;        // 드래그 중 플랩 각도 (180°보다 살짝 덜 접어 들려 있는 느낌)
+let lastPreviewBuild = 0;
 
-function foldPreview(P, Q, pieceId) {
+function computeFoldPre(P, Q, pieceId) { // 순수 계산 (그리기 없음)
   const dx = Q.x - P.x, dy = Q.y - P.y;
   const len = Math.hypot(dx, dy);
-  if (len < 0.6) { clearLineVisual(); clearHighlight(); return null; }
-  const nrm = { x: dx / len, y: dy / len };          // P→Q 방향 (접는 선의 법선)
+  if (len < 0.6) return null;
+  const nrm = { x: dx / len, y: dy / len };           // P→Q 방향 (접는 선의 법선)
   const L0 = { x: (P.x + Q.x) / 2, y: (P.y + Q.y) / 2 };
-  const u = { x: -nrm.y, y: nrm.x };                  // 접는 선 방향
+  const u = { x: -nrm.y, y: nrm.x };                   // 접는 선 방향
   const s = splitPiece(L0, u, pieceId);
-  if (!s) { clearLineVisual(); clearHighlight(); return null; }
-  // P쪽(= g<0 쪽)이 접힘
+  if (!s) return null;
   const gP = (P.x - L0.x) * s.n.x + (P.y - L0.y) * s.n.y;
-  const foldSide = gP >= 0 ? s.pos : s.neg;
-  const staySide = gP >= 0 ? s.neg : s.pos;
-  drawLineVisual(
-    { x: L0.x - u.x * 6, y: L0.y - u.y * 6 },
-    { x: L0.x + u.x * 6, y: L0.y + u.y * 6 },
-    matFoldLine, matFoldDash
-  );
-  showHighlight(foldSide);
-  return { stay: staySide, fold: foldSide, keep: s.keep, L0, u, sign: gP >= 0 ? 1 : -1 };
+  return {
+    stay: gP >= 0 ? s.neg : s.pos,
+    fold: gP >= 0 ? s.pos : s.neg,
+    keep: s.keep,
+    L0, u,
+    sign: gP >= 0 ? 1 : -1,
+  };
 }
 
-function startFoldAnim(pre) {
-  // 렌더링 분리: stay+keep → paperGroup, fold → previewGroup
+function applyFoldMatrix(pre, k, dir) {
+  const zTop = maxLayer() * LAYER_EPS;
+  const hingeZ = dir === 'over' ? zTop / 2 + LAYER_EPS * 0.5 : -LAYER_EPS * 0.5;
+  const axis = new THREE.Vector3(pre.u.x * pre.sign, pre.u.y * pre.sign, 0).normalize();
+  const theta = Math.PI * k * (dir === 'over' ? 1 : -1);
+  const M = new THREE.Matrix4()
+    .makeTranslation(pre.L0.x, pre.L0.y, hingeZ)
+    .multiply(new THREE.Matrix4().makeRotationAxis(axis, theta))
+    .multiply(new THREE.Matrix4().makeTranslation(-pre.L0.x, -pre.L0.y, -hingeZ));
+  previewGroup.matrix.copy(M);
+}
+
+// 드래그 중 실시간 미리보기: stay+keep은 고정, fold 플랩은 커서를 따라 접힌 상태로
+function renderFoldDragPreview(pre) {
+  const now = performance.now();
+  if (now - lastPreviewBuild > 24) { // 지오메트리 재생성은 ~40fps로 제한
+    lastPreviewBuild = now;
+    clearGroup(paperGroup); clearGroup(previewGroup);
+    for (const f of [...pre.keep, ...pre.stay]) buildFacetInto(paperGroup, f);
+    for (const f of pre.fold) buildFacetInto(previewGroup, f);
+  }
+  applyFoldMatrix(pre, DRAG_K, foldDir);
+  drawLineVisual(
+    { x: pre.L0.x - pre.u.x * 6, y: pre.L0.y - pre.u.y * 6 },
+    { x: pre.L0.x + pre.u.x * 6, y: pre.L0.y + pre.u.y * 6 },
+    matFoldLine, matFoldDash
+  );
+}
+
+function startFoldSettle(pre) { // 놓는 순간: 현재 각도 → 180° 로 짧게 정착
   clearGroup(paperGroup); clearGroup(previewGroup); clearGroup(overlayGroup);
   previewGroup.matrix.identity();
   for (const f of [...pre.keep, ...pre.stay]) buildFacetInto(paperGroup, f);
   for (const f of pre.fold) buildFacetInto(previewGroup, f);
-  foldAnim = { t0: performance.now(), ...pre, dir: foldDir };
-}
-
-function applyFoldAnimMatrix(k) {
-  const a = foldAnim;
-  const zTop = maxLayer() * LAYER_EPS;
-  const hingeZ = a.dir === 'over' ? zTop / 2 + LAYER_EPS * 0.5 : -LAYER_EPS * 0.5;
-  const axis = new THREE.Vector3(a.u.x * a.sign, a.u.y * a.sign, 0).normalize();
-  const theta = Math.PI * k * (a.dir === 'over' ? 1 : -1);
-  const M = new THREE.Matrix4()
-    .makeTranslation(a.L0.x, a.L0.y, hingeZ)
-    .multiply(new THREE.Matrix4().makeRotationAxis(axis, theta))
-    .multiply(new THREE.Matrix4().makeTranslation(-a.L0.x, -a.L0.y, -hingeZ));
-  previewGroup.matrix.copy(M);
+  applyFoldMatrix(pre, DRAG_K, foldDir);
+  foldAnim = { t0: performance.now(), fromK: DRAG_K, ...pre, dir: foldDir };
 }
 
 function finishFoldAnim() {
@@ -610,7 +625,7 @@ function setHint(t) { hint.textContent = t; }
 
 const HINTS = {
   view: '드래그로 회전 · 휠/핀치로 확대축소',
-  fold: '접을 부분을 잡아서 원하는 곳으로 끌어다 놓으세요 (모서리끼리 자석) · 우클릭 회전',
+  fold: '접을 부분을 잡고 끌면 따라 접혀요 — 원하는 곳에서 놓기 (모서리 자석) · 우클릭 회전',
   cut: '드래그로 자를 선을 그으세요 · 우클릭 회전',
   move: '조각을 잡아 끌어서 옮기세요 · 우클릭 회전',
 };
@@ -748,13 +763,13 @@ canvas.addEventListener('pointerdown', (e) => {
     if (pid == null) return;
     foldDrag = { P: s.point, pieceId: pid };
     placeMarker(snapMarkerA, s.point, s.snapped);
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
     canvas.style.cursor = 'grabbing';
   } else if (mode === 'cut') {
     const s = snapPoint(raw, e);
     cutDrag = { p0: s.point, p1: s.point };
     placeMarker(snapMarkerA, s.point, s.snapped);
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
   } else if (mode === 'move') {
     const pid = pieceAt(raw);
     if (pid == null) return;
@@ -762,7 +777,7 @@ canvas.addEventListener('pointerdown', (e) => {
     moveDrag = { pieceId: pid, start: raw, cur: raw };
     rebuildScene(f => f.pieceId === pid); // 잡은 조각을 previewGroup으로
     highlightSelected();
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
     canvas.style.cursor = 'grabbing';
   }
 });
@@ -775,7 +790,13 @@ canvas.addEventListener('pointermove', (e) => {
   if (mode === 'fold' && foldDrag) {
     const s = snapPoint(raw, e);
     placeMarker(snapMarkerB, s.point, s.snapped);
-    lastFoldPreview = foldPreview(foldDrag.P, s.point, foldDrag.pieceId);
+    const pre = computeFoldPre(foldDrag.P, s.point, foldDrag.pieceId);
+    if (pre) {
+      renderFoldDragPreview(pre); // 플랩이 커서를 따라 실시간으로 접힘
+    } else if (lastFoldPreview) {
+      rebuildScene(); clearLineVisual(); // 유효 범위를 벗어나면 원상 표시
+    }
+    lastFoldPreview = pre;
   } else if (mode === 'fold') {
     const s = snapPoint(raw, e);
     placeMarker(snapMarkerA, s.point, s.snapped);
@@ -800,7 +821,8 @@ canvas.addEventListener('pointerup', (e) => {
     foldDrag = null; lastFoldPreview = null;
     hideMarkers(); clearLineVisual(); clearHighlight();
     canvas.style.cursor = 'grab';
-    if (pre) startFoldAnim(pre);
+    if (pre) startFoldSettle(pre);
+    else rebuildScene();
   } else if (mode === 'cut' && cutDrag) {
     const { p0, p1 } = cutDrag;
     cutDrag = null;
@@ -835,8 +857,7 @@ window.__fold = {
   grabFold(px, py, qx, qy, dir = 'over') { // 잡아 끌기 접기 (즉시 커밋)
     const pid = pieceAt({ x: px, y: py });
     if (pid == null) return false;
-    const pre = foldPreview({ x: px, y: py }, { x: qx, y: qy }, pid);
-    clearLineVisual(); clearHighlight();
+    const pre = computeFoldPre({ x: px, y: py }, { x: qx, y: qy }, pid);
     if (!pre) return false;
     commitFoldPieces(pre.stay, pre.fold, pre.keep, pre.L0, pre.u, dir);
     rebuildScene();
@@ -881,10 +902,10 @@ function animate() {
     if (k >= 1) flipAnim = null;
   }
   if (foldAnim) {
-    const k = Math.min(1, (performance.now() - foldAnim.t0) / FOLD_ANIM_MS);
-    const e = k < 0.5 ? 2 * k * k : -1 + (4 - 2 * k) * k;
-    applyFoldAnimMatrix(e);
-    if (k >= 1) finishFoldAnim();
+    const t = Math.min(1, (performance.now() - foldAnim.t0) / FOLD_ANIM_MS);
+    const k = foldAnim.fromK + (1 - foldAnim.fromK) * t;
+    applyFoldMatrix(foldAnim, k, foldAnim.dir);
+    if (t >= 1) finishFoldAnim();
   }
   controls.update();
   renderer.render(scene, camera);
