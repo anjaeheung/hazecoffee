@@ -99,6 +99,28 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(0, 0, 0);
 
+// 접기 모드에서는 좌클릭/한 손가락 = 선 긋기, 우클릭/두 손가락 = 회전
+function setControlsForDrawing(drawing) {
+  controls.enabled = true;
+  if (drawing) {
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+    controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE };
+  } else {
+    controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  }
+}
+
+// 🔄 뒤집기: 카메라를 종이 반대편으로 부드럽게 이동
+let flipAnim = null;
+const _sph = new THREE.Spherical();
+function startFlip() {
+  _sph.setFromVector3(camera.position.clone().sub(controls.target));
+  const from = _sph.phi;
+  const to = Math.min(Math.PI - 0.03, Math.max(0.03, Math.PI - from));
+  flipAnim = { t0: performance.now(), from, to, theta: _sph.theta, r: _sph.radius };
+}
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -393,16 +415,16 @@ function setMode(m) {
   mode = m;
   foldPanel.classList.toggle('hidden', m !== 'angle');
   btnFold.classList.toggle('active', m !== 'view');
-  controls.enabled = (m === 'view' || m === 'angle');
+  setControlsForDrawing(m === 'draw' || m === 'side');
   canvas.style.cursor = (m === 'draw') ? 'crosshair' : 'default';
   if (m === 'view') {
     setHint('드래그로 회전 · 휠/핀치로 확대축소');
     clearGroup(overlayGroup); highlightSign = 0;
   } else if (m === 'draw') {
-    setHint('종이 위에 접을 선을 드래그로 그으세요');
+    setHint('드래그로 접을 선 긋기 · 우클릭(두 손가락)으로 회전');
     clearGroup(overlayGroup); highlightSign = 0;
   } else if (m === 'side') {
-    setHint('접을 쪽을 클릭하세요');
+    setHint('접을 쪽을 클릭하세요 · 우클릭(두 손가락)으로 회전');
   } else if (m === 'angle') {
     setHint('슬라이더로 접기 · 180°에서 확정 (드래그로 회전 가능)');
   }
@@ -426,6 +448,10 @@ document.getElementById('btnReset').addEventListener('click', () => {
   undoStack.push(structuredClone(facets));
   facets = [initialFacet()];
   rebuildScene();
+});
+
+document.getElementById('btnFlip').addEventListener('click', () => {
+  startFlip();
 });
 
 btnLight.addEventListener('click', () => {
@@ -516,6 +542,7 @@ function pointerToTable(e) {
 let dragStart = null, dragCur = null, downPos = null;
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || !e.isPrimary) return; // 좌클릭/첫 손가락만 (우클릭·두 손가락은 회전)
   if (mode === 'draw') {
     const p = pointerToTable(e);
     if (!p) return;
@@ -611,6 +638,14 @@ setMode('view');
 
 function animate() {
   requestAnimationFrame(animate);
+  if (flipAnim) {
+    const k = Math.min(1, (performance.now() - flipAnim.t0) / 500);
+    const e = k < 0.5 ? 2 * k * k : -1 + (4 - 2 * k) * k; // easeInOut
+    const phi = flipAnim.from + (flipAnim.to - flipAnim.from) * e;
+    camera.position.copy(controls.target)
+      .add(new THREE.Vector3().setFromSphericalCoords(flipAnim.r, phi, flipAnim.theta));
+    if (k >= 1) flipAnim = null;
+  }
   controls.update();
   renderer.render(scene, camera);
 }
