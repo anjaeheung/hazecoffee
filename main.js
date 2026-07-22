@@ -1133,8 +1133,67 @@ rebuildTextures();
 rebuildScene();
 setMode('view');
 
-// 내장 기본 이미지: assets/front.* / assets/back.* 이 저장소에 있으면 자동 적용
-(async function tryLoadDefaults() {
+// ---------- 정보(종이) 여러 개: assets/1-front.*, 1-back.*, 2-front.* ... 자동 발견 ----------
+let papers = [];              // [{ front, back }]
+let currentPaper = 0;
+const paperStates = new Map(); // idx -> { facets, undo, paperW, frontImg, backImg }
+const paperBar = document.getElementById('paperBar');
+
+function applyPaperImages() { // frontImg/backImg 기준으로 종이 크기 초기화
+  paperH = BASE_H;
+  paperW = frontImg
+    ? Math.min(60, Math.max(5, BASE_H * (frontImg.naturalWidth / frontImg.naturalHeight)))
+    : 21.0;
+}
+
+function saveCurrentPaperState() {
+  paperStates.set(currentPaper, {
+    facets: structuredClone(facets),
+    undo: structuredClone(undoStack),
+    paperW, frontImg, backImg,
+  });
+}
+
+function switchPaper(idx, initial = false) {
+  if (!initial) {
+    if (idx === currentPaper) return;
+    saveCurrentPaperState();
+  }
+  currentPaper = idx;
+  const st = paperStates.get(idx);
+  if (st) {
+    facets = structuredClone(st.facets);
+    undoStack.length = 0;
+    for (const u of st.undo) undoStack.push(u);
+    paperW = st.paperW; paperH = BASE_H;
+    frontImg = st.frontImg; backImg = st.backImg;
+  } else {
+    const p = papers[idx] || { front: null, back: null };
+    frontImg = p.front; backImg = p.back;
+    applyPaperImages();
+    facets = [initialFacet()];
+    undoStack.length = 0;
+  }
+  selectedPiece = null;
+  rebuildTextures();
+  rebuildScene();
+  for (let i = 0; i < paperBar.children.length; i++) {
+    paperBar.children[i].classList.toggle('active', i === idx);
+  }
+}
+
+function buildPaperBar() {
+  paperBar.innerHTML = '';
+  paperBar.classList.toggle('hidden', papers.length <= 1);
+  papers.forEach((_, i) => {
+    const b = document.createElement('button');
+    b.textContent = `정보 ${i + 1}`;
+    b.addEventListener('click', () => switchPaper(i));
+    paperBar.appendChild(b);
+  });
+}
+
+(async function discoverPapers() {
   const tryImg = (srcs) => new Promise(res => {
     const next = (i) => {
       if (i >= srcs.length) return res(null);
@@ -1146,20 +1205,22 @@ setMode('view');
     next(0);
   });
   const exts = ['jpg', 'png', 'webp', 'jpeg'];
-  const [f, b] = await Promise.all([
-    tryImg(exts.map(e => `assets/front.${e}`)),
-    tryImg(exts.map(e => `assets/back.${e}`)),
-  ]);
-  if (f) {
-    frontImg = f;
-    const aspect = f.naturalWidth / f.naturalHeight;
-    paperH = BASE_H;
-    paperW = Math.min(60, Math.max(5, BASE_H * aspect));
-    facets = [initialFacet()];
-    undoStack.length = 0;
+  const results = await Promise.all(Array.from({ length: 12 }, (_, i) => Promise.all([
+    tryImg(exts.map(e => `assets/${i + 1}-front.${e}`)),
+    tryImg(exts.map(e => `assets/${i + 1}-back.${e}`)),
+  ])));
+  papers = results.filter(([f]) => f).map(([f, b]) => ({ front: f, back: b }));
+  if (!papers.length) { // 구버전 호환: front.* / back.*
+    const [f, b] = await Promise.all([
+      tryImg(exts.map(e => `assets/front.${e}`)),
+      tryImg(exts.map(e => `assets/back.${e}`)),
+    ]);
+    if (f || b) papers = [{ front: f, back: b }];
   }
-  if (b) backImg = b;
-  if (f || b) { rebuildTextures(); rebuildScene(); }
+  if (papers.length) {
+    buildPaperBar();
+    switchPaper(0, true);
+  }
 })();
 
 function animate() {
