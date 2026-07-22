@@ -1565,6 +1565,12 @@ function animate() {
     }
     if (k >= 1) spreadAnim = null;
   }
+  // 겹치기: 어느 쪽에서 보든 그림이 거울상이 되지 않게 자동 보정
+  if (overlay?.mesh) {
+    const below = camera.position.z < overlay.mesh.position.z;
+    const sx = overlay.scale * (below ? -1 : 1);
+    if (overlay.mesh.scale.x !== sx) overlay.mesh.scale.x = sx;
+  }
   controls.update();
   renderer.render(scene, camera);
 }
