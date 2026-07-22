@@ -356,7 +356,7 @@ let creaseLines = []; // 접힌 선 후보: 같은 직선 위 에지가 2번 이
 function refreshSnapCache() {
   snapCache = [];
   const seen = new Set();
-  const lineCount = new Map(); // 직선 시그니처 -> { A, u, count }
+  const lineCount = []; // { A, u, count } — 같은 직선 위 에지 개수
   for (const f of facets) {
     const z = f.layer * LAYER_EPS;
     const tp = f.pts.map(p => applyT(f.T, p));
@@ -366,20 +366,24 @@ function refreshSnapCache() {
         const key = `${Math.round(c.x * 25)},${Math.round(c.y * 25)}`;
         if (!seen.has(key)) { seen.add(key); snapCache.push({ x: c.x, y: c.y, z }); }
       }
-      // 에지가 놓인 직선 수집
+      // 에지가 놓인 직선 수집 (해시 대신 허용오차 클러스터링 — 부동소수점에 강건하게)
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy);
       if (len < 0.5) continue;
       let ux = dx / len, uy = dy / len;
-      if (ux < -1e-9 || (Math.abs(ux) < 1e-9 && uy < 0)) { ux = -ux; uy = -uy; } // 방향 정규화
-      const d = -uy * a.x + ux * a.y; // 원점까지 부호거리
-      const lkey = `${Math.round(Math.atan2(uy, ux) * 57.3)},${Math.round(d * 8)}`;
-      const rec = lineCount.get(lkey);
-      if (rec) rec.count++;
-      else lineCount.set(lkey, { A: a, u: { x: ux, y: uy }, count: 1 });
+      if (ux < 0 || (Math.abs(ux) < 1e-6 && uy < 0)) { ux = -ux; uy = -uy; }
+      let found = null;
+      for (const l of lineCount) {
+        if (Math.abs(ux * l.u.x + uy * l.u.y) < 0.99996) continue;       // 평행(0.5도 이내)
+        const dist = Math.abs(-l.u.y * (a.x - l.A.x) + l.u.x * (a.y - l.A.y));
+        if (dist > 0.08) continue;                                        // 같은 직선 위
+        found = l; break;
+      }
+      if (found) found.count++;
+      else lineCount.push({ A: { x: a.x, y: a.y }, u: { x: ux, y: uy }, count: 1 });
     }
   }
-  creaseLines = [...lineCount.values()].filter(r => r.count >= 2);
+  creaseLines = lineCount.filter(r => r.count >= 2);
 }
 
 // 접는 선이 기존 접힌 선과 거의 겹치면 그 선에 정확히 스냅 → 접힌 걸 도로 펼 수 있음
@@ -605,7 +609,7 @@ function computeUnfoldPre(P, Q, pieceId) {
   const lenq = Math.hypot(dxq, dyq);
   if (lenq < 0.6) return null;
   const ub = { x: -dyq / lenq, y: dxq / lenq }; // 이등분선(접는 선) 방향
-  const COS_TOL = Math.cos(THREE.MathUtils.degToRad(25));
+  const COS_TOL = Math.cos(THREE.MathUtils.degToRad(35));
   let best = null, bestT = Infinity;
   for (const c of creaseLines) {
     if (Math.abs(ub.x * c.u.x + ub.y * c.u.y) < COS_TOL) continue;
@@ -1121,6 +1125,7 @@ window.__fold = {
     if (flipAnim) { setPolar(flipAnim.r, flipAnim.to, flipAnim.theta); flipAnim = null; }
   },
   snapAt(x, y) { return snapCache.filter(c => Math.hypot(c.x - x, c.y - y) < 2); },
+  creases() { return creaseLines.map(c => ({ A: c.A, u: c.u, count: c.count })); },
 };
 
 // ---------- 시작 ----------
