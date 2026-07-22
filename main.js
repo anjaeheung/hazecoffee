@@ -122,6 +122,7 @@ function initialFacet() {
 let facets = [initialFacet()];
 const undoStack = [];
 let mode = 'view';           // view | fold | cut | move
+let spreadMode = false;      // 키트 펼침 상태 (setMode가 시작 시 먼저 호출되므로 여기서 선언)
 let lightMode = false;
 let foldDir = 'over';        // over | under
 let selectedPiece = null;    // 옮기기 모드에서 마지막으로 잡은 조각
@@ -839,6 +840,7 @@ function cutHint() { return cutShape === 'rect' ? HINTS.cutRect : HINTS.cut; }
 
 function setMode(m) {
   if (foldAnim) return; // 접히는 중엔 무시
+  if (spreadMode && m !== 'view') return; // 펼침 상태에선 도구 잠금
   mode = m;
   dirPanel.classList.toggle('hidden', m !== 'fold');
   rotPanel.classList.toggle('hidden', m !== 'move');
@@ -967,6 +969,7 @@ let lastFoldPreview = null;
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || !e.isPrimary || foldAnim) return;
+  if (spreadMode) { spreadDown = { x: e.clientX, y: e.clientY }; return; }
   const raw = pointerToTable(e);
   if (!raw) return;
 
@@ -1037,6 +1040,20 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 canvas.addEventListener('pointerup', (e) => {
+  if (spreadMode && spreadDown) {
+    const moved = Math.hypot(e.clientX - spreadDown.x, e.clientY - spreadDown.y);
+    spreadDown = null;
+    if (moved > 8) return; // 회전 드래그였음
+    const rect = canvas.getBoundingClientRect();
+    raycaster.setFromCamera({
+      x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    }, camera);
+    const hits = raycaster.intersectObjects(spreadGroup.children)
+      .filter(h => h.object.userData.paperIdx != null);
+    if (hits.length) exitSpread(hits[0].object.userData.paperIdx);
+    return;
+  }
   if (mode === 'fold' && foldDrag) {
     const pre = lastFoldPreview;
     foldDrag = null; lastFoldPreview = null; dragSnapExtras = [];
@@ -1142,6 +1159,89 @@ const paperBar = document.getElementById('paperBar');
 let openMode = false; // 개봉 상태 (N-open.* 이미지 표시 중)
 let btnOpen = null;
 
+// ---------- 키트(클리어파일) 펼치기 ----------
+// assets/0-front.* 이 있으면 첫 화면 = 키트. 개봉하면 자료들이 퍼져 나옴
+let revealed = false;    // 개봉해서 정보 탭이 공개됨
+let spreadAnim = null;
+let spreadDown = null;
+const spreadGroup = new THREE.Group();
+scene.add(spreadGroup);
+const spreadTexCache = new Map();
+
+const SPREAD_SLOTS = [
+  { x: -12, y: 7, r: -8 }, { x: 12, y: 8, r: 6 }, { x: -12, y: -8, r: 5 },
+  { x: 13, y: -7, r: -5 }, { x: 0, y: 13, r: 3 }, { x: 0, y: -13, r: -4 },
+  { x: -22, y: 0, r: 10 }, { x: 22, y: 0, r: -9 }, { x: -20, y: 13, r: 7 },
+  { x: 20, y: -13, r: -7 }, { x: 20, y: 13, r: 9 }, { x: -20, y: -13, r: -9 },
+];
+
+function spreadTexture(key, img) {
+  if (spreadTexCache.has(key)) return spreadTexCache.get(key);
+  const scale = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.max(32, Math.round(img.naturalWidth * scale));
+  c.height = Math.max(32, Math.round(img.naturalHeight * scale));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  spreadTexCache.set(key, t);
+  return t;
+}
+
+function enterSpread() {
+  spreadMode = true;
+  revealed = true;
+  paperGroup.visible = previewGroup.visible = overlayGroup.visible = false;
+  hideMarkers();
+  clearGroup(spreadGroup);
+  // 가운데엔 빈 클리어파일(키트의 open 이미지)이 남음
+  const kit = papers.find(p => p.isKit);
+  if (kit?.open) {
+    const img = kit.open;
+    const h = 19;
+    const w = h * (img.naturalWidth / img.naturalHeight);
+    const center = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ map: spreadTexture('kit-open', img), side: THREE.DoubleSide })
+    );
+    center.position.set(0, 0, 0.05);
+    spreadGroup.add(center);
+  }
+  const infos = papers.map((p, i) => ({ p, i })).filter(x => !x.p.isKit && x.p.front);
+  infos.forEach((x, k) => {
+    const img = x.p.front;
+    const h = 15;
+    const w = h * (img.naturalWidth / img.naturalHeight);
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ map: spreadTexture('p' + x.i, img), side: THREE.DoubleSide })
+    );
+    mesh.userData = { paperIdx: x.i, slot: SPREAD_SLOTS[k % SPREAD_SLOTS.length] };
+    mesh.position.set(0, 0, 0.3 + k * 0.06);
+    spreadGroup.add(mesh);
+  });
+  spreadGroup.visible = true;
+  spreadAnim = { t0: performance.now() };
+  alignTopDown();
+  updatePaperBarUI();
+  syncOpenBtn();
+  setHint('자료를 클릭하면 자세히 볼 수 있어요');
+}
+
+function exitSpread(toIdx = null) {
+  spreadMode = false;
+  spreadAnim = null;
+  clearGroup(spreadGroup);
+  paperGroup.visible = previewGroup.visible = overlayGroup.visible = true;
+  if (toIdx != null && toIdx !== currentPaper) {
+    switchPaper(toIdx);
+  } else {
+    updatePaperBarUI();
+    syncOpenBtn();
+    setHint(HINTS.view);
+  }
+}
+
 function applyPaperImages() { // frontImg/backImg 기준으로 종이 크기 초기화
   paperH = BASE_H;
   paperW = frontImg
@@ -1167,11 +1267,31 @@ function saveCurrentPaperState() {
 function syncOpenBtn() {
   if (!btnOpen) return;
   const p = papers[currentPaper];
-  btnOpen.classList.toggle('hidden', !p?.open);
-  btnOpen.textContent = openMode ? '📦 닫기' : '📦 개봉';
+  if (p?.isKit) {
+    btnOpen.classList.remove('hidden');
+    btnOpen.textContent = spreadMode ? '🗂 모으기' : '📦 개봉';
+  } else {
+    btnOpen.classList.toggle('hidden', !p?.open);
+    btnOpen.textContent = openMode ? '📦 닫기' : '📦 개봉';
+  }
+}
+
+function updatePaperBarUI() { // 키트 있으면 개봉 전까지 정보 탭 숨김
+  const kit = papers.some(p => p.isKit);
+  for (let i = 0; i < papers.length && i < paperBar.children.length; i++) {
+    const chip = paperBar.children[i];
+    chip.classList.toggle('locked', kit && !revealed && !papers[i].isKit);
+    chip.classList.toggle('active', i === currentPaper && !spreadMode);
+  }
 }
 
 function switchPaper(idx, initial = false) {
+  if (spreadMode) { // 펼침 상태에서 탭 클릭 → 펼침 종료 후 이동
+    spreadMode = false;
+    spreadAnim = null;
+    clearGroup(spreadGroup);
+    paperGroup.visible = previewGroup.visible = overlayGroup.visible = true;
+  }
   if (!initial) {
     if (idx === currentPaper) return;
     saveCurrentPaperState();
@@ -1194,13 +1314,16 @@ function switchPaper(idx, initial = false) {
   selectedPiece = null;
   rebuildTextures();
   rebuildScene();
-  for (let i = 0; i < papers.length && i < paperBar.children.length; i++) {
-    paperBar.children[i].classList.toggle('active', i === idx);
-  }
+  updatePaperBarUI();
   syncOpenBtn();
 }
 
 function toggleOpen() {
+  if (papers[currentPaper]?.isKit) { // 키트: 개봉 = 자료 펼치기
+    if (spreadMode) exitSpread();
+    else enterSpread();
+    return;
+  }
   openMode = !openMode;
   applyModeImages();
   facets = [initialFacet()];
@@ -1214,11 +1337,12 @@ function toggleOpen() {
 
 function buildPaperBar() {
   paperBar.innerHTML = '';
-  const anyOpen = papers.some(p => p.open);
+  const anyOpen = papers.some(p => p.open || p.isKit);
   paperBar.classList.toggle('hidden', papers.length <= 1 && !anyOpen);
-  papers.forEach((_, i) => {
+  let n = 0;
+  papers.forEach((p, i) => {
     const b = document.createElement('button');
-    b.textContent = `정보 ${i + 1}`;
+    b.textContent = p.isKit ? '🗂 키트' : `정보 ${++n}`;
     b.addEventListener('click', () => switchPaper(i));
     paperBar.appendChild(b);
   });
@@ -1227,38 +1351,49 @@ function buildPaperBar() {
   btnOpen.textContent = '📦 개봉';
   btnOpen.addEventListener('click', toggleOpen);
   paperBar.appendChild(btnOpen);
+  updatePaperBarUI();
 }
 
 (async function discoverPapers() {
   const tryImg = (srcs) => new Promise(res => {
+    let settled = false;
+    const done = v => { if (!settled) { settled = true; res(v); } };
     const next = (i) => {
-      if (i >= srcs.length) return res(null);
+      if (i >= srcs.length) return done(null);
       const img = new Image();
-      img.onload = () => res(img);
+      img.onload = () => done(img);
       img.onerror = () => next(i + 1);
       img.src = srcs[i];
     };
     next(0);
+    setTimeout(() => done(null), 8000); // 응답 없는 요청에 전체가 매달리지 않게
   });
   const exts = ['jpg', 'png', 'webp', 'jpeg'];
-  const results = await Promise.all(Array.from({ length: 12 }, (_, i) => Promise.all([
-    tryImg(exts.map(e => `assets/${i + 1}-front.${e}`)),
-    tryImg(exts.map(e => `assets/${i + 1}-back.${e}`)),
-    tryImg(exts.map(e => `assets/${i + 1}-open.${e}`)),
+  const results = await Promise.all(Array.from({ length: 13 }, (_, i) => Promise.all([
+    tryImg(exts.map(e => `assets/${i}-front.${e}`)),
+    tryImg(exts.map(e => `assets/${i}-back.${e}`)),
+    tryImg(exts.map(e => `assets/${i}-open.${e}`)),
   ])));
-  papers = results.filter(([f]) => f).map(([f, b, o]) => ({ front: f, back: b, open: o }));
+  papers = results
+    .map(([f, b, o], i) => ({ front: f, back: b, open: o, isKit: i === 0 }))
+    .filter(p => p.front);
   if (!papers.length) { // 구버전 호환: front.* / back.*
     const [f, b] = await Promise.all([
       tryImg(exts.map(e => `assets/front.${e}`)),
       tryImg(exts.map(e => `assets/back.${e}`)),
     ]);
-    if (f || b) papers = [{ front: f, back: b }];
+    if (f || b) papers = [{ front: f, back: b, open: null, isKit: false }];
   }
+  window.__discover = { found: papers.length };
   if (papers.length) {
-    buildPaperBar();
-    switchPaper(0, true);
+    try {
+      buildPaperBar();
+      switchPaper(0, true);
+    } catch (err) {
+      window.__discover.err = String(err && err.stack || err);
+    }
   }
-})();
+})().catch(err => { window.__discover = { fatal: String(err && err.stack || err) }; });
 
 function animate() {
   requestAnimationFrame(animate);
@@ -1274,6 +1409,18 @@ function animate() {
     const k = foldAnim.fromK + (1 - foldAnim.fromK) * t;
     applyFoldMatrix(foldAnim, k, foldAnim.dir);
     if (t >= 1) finishFoldAnim();
+  }
+  if (spreadAnim) { // 자료가 사방으로 퍼지는 연출
+    const k = Math.min(1, (performance.now() - spreadAnim.t0) / 700);
+    const e = 1 - Math.pow(1 - k, 3);
+    for (const m of spreadGroup.children) {
+      const s = m.userData.slot;
+      if (!s) continue; // 가운데 빈 파일은 고정
+      m.position.x = s.x * e;
+      m.position.y = s.y * e;
+      m.rotation.z = THREE.MathUtils.degToRad(s.r) * e;
+    }
+    if (k >= 1) spreadAnim = null;
   }
   controls.update();
   renderer.render(scene, camera);

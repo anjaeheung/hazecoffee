@@ -68,6 +68,7 @@ html, body {
 #paperBar button.active { background: #4f7cff; border-color: #6f95ff; }
 #paperBar button.openBtn { background: rgba(255, 186, 73, 0.14); border-color: rgba(255, 186, 73, 0.45); }
 #paperBar button.openBtn.hidden { display: none; }
+#paperBar button.locked { display: none; }
 
 .panel {
   position: fixed;
