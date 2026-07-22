@@ -28,6 +28,14 @@
   <button id="btnReset" title="처음 상태로">⟲ 펴기</button>
   <button id="btnFlip" title="반대편에서 보기">🔄 뒤집기</button>
   <button id="btnLight" title="빛에 비추기 (앞뒤 겹쳐보기)">💡 비추기</button>
+  <button id="btnOverlay" title="다른 자료를 반투명하게 겹쳐 대보기">🗂 겹치기</button>
+</div>
+
+<div id="overlayPanel" class="panel hidden">
+  <div id="overlaySrcs"></div>
+  <button id="ovMirror" title="좌우 반전">↔ 반전</button>
+  <input type="range" id="ovScale" min="20" max="220" value="100" title="크기">
+  <button id="ovClose">✕ 닫기</button>
 </div>
 
 <div id="paperBar" class="hidden"></div>
@@ -53,6 +61,6 @@
 <input type="file" id="fileBack" accept="image/*" hidden>
 
 <canvas id="view"></canvas>
-<script type="module" src="main.js?v=11"></script>
+<script type="module" src="main.js?v=16"></script>
 </body>
 </html>

@@ -94,6 +94,13 @@ html, body {
 }
 .panel .dir.active { background: #4f7cff; border-color: #6f95ff; }
 
+#overlayPanel { align-items: center; flex-wrap: wrap; max-width: calc(100vw - 24px); }
+#overlaySrcs { display: flex; gap: 5px; flex-wrap: wrap; }
+#overlaySrcs button { font-size: 13px; padding: 6px 10px; }
+#overlaySrcs button.active { background: #4f7cff; border-color: #6f95ff; }
+#ovMirror.active { background: #4f7cff; border-color: #6f95ff; }
+#ovScale { width: 110px; accent-color: #4f7cff; }
+
 #hint {
   position: fixed;
   bottom: 14px; left: 50%;
