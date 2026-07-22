@@ -1133,6 +1133,35 @@ rebuildTextures();
 rebuildScene();
 setMode('view');
 
+// 내장 기본 이미지: assets/front.* / assets/back.* 이 저장소에 있으면 자동 적용
+(async function tryLoadDefaults() {
+  const tryImg = (srcs) => new Promise(res => {
+    const next = (i) => {
+      if (i >= srcs.length) return res(null);
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = () => next(i + 1);
+      img.src = srcs[i];
+    };
+    next(0);
+  });
+  const exts = ['jpg', 'png', 'webp', 'jpeg'];
+  const [f, b] = await Promise.all([
+    tryImg(exts.map(e => `assets/front.${e}`)),
+    tryImg(exts.map(e => `assets/back.${e}`)),
+  ]);
+  if (f) {
+    frontImg = f;
+    const aspect = f.naturalWidth / f.naturalHeight;
+    paperH = BASE_H;
+    paperW = Math.min(60, Math.max(5, BASE_H * aspect));
+    facets = [initialFacet()];
+    undoStack.length = 0;
+  }
+  if (b) backImg = b;
+  if (f || b) { rebuildTextures(); rebuildScene(); }
+})();
+
 function animate() {
   requestAnimationFrame(animate);
   if (flipAnim) {
