@@ -1011,18 +1011,26 @@ function updateOverlayMesh() {
   overlay.mesh.position.set(overlay.x, overlay.y, maxLayer() * LAYER_EPS + 1.0);
   overlay.mesh.scale.set(overlay.scale, overlay.scale, 1);
 }
+function fitOverlayToPaper() { // 종이에 끼운 것처럼 정확히 겹치기
+  if (!overlay) return;
+  overlay.x = 0; overlay.y = 0;
+  overlay.scale = paperH / overlay.baseH;
+  ovScale.value = Math.round(overlay.scale * 100);
+  updateOverlayMesh();
+}
 function setOverlaySrc(idx) {
   const img = papers[idx].front;
   const h = 22;
   overlay = {
     srcIdx: idx,
-    x: overlay?.x ?? 0, y: overlay?.y ?? 0,
-    scale: parseInt(ovScale.value, 10) / 100,
+    x: 0, y: 0,
+    scale: 1,
     mirror: overlay?.mirror ?? false,
     baseW: h * (img.naturalWidth / img.naturalHeight), baseH: h,
     mesh: null,
   };
   buildOverlayMesh();
+  fitOverlayToPaper(); // 기본: 종이 크기에 딱 맞춰 시작
   for (const b of overlaySrcs.children) b.classList.toggle('active', +b.dataset.idx === idx);
 }
 function openOverlay() {
@@ -1054,6 +1062,7 @@ function closeOverlay() {
 }
 btnOverlay.addEventListener('click', () => { if (overlay) closeOverlay(); else openOverlay(); });
 document.getElementById('ovClose').addEventListener('click', closeOverlay);
+document.getElementById('ovFit').addEventListener('click', fitOverlayToPaper);
 ovMirrorBtn.addEventListener('click', () => {
   if (!overlay) return;
   overlay.mirror = !overlay.mirror;
