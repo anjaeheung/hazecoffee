@@ -1139,6 +1139,9 @@ let currentPaper = 0;
 const paperStates = new Map(); // idx -> { facets, undo, paperW, frontImg, backImg }
 const paperBar = document.getElementById('paperBar');
 
+let openMode = false; // 개봉 상태 (N-open.* 이미지 표시 중)
+let btnOpen = null;
+
 function applyPaperImages() { // frontImg/backImg 기준으로 종이 크기 초기화
   paperH = BASE_H;
   paperW = frontImg
@@ -1146,12 +1149,26 @@ function applyPaperImages() { // frontImg/backImg 기준으로 종이 크기 초
     : 21.0;
 }
 
+function applyModeImages() { // 현재 정보의 닫힘/개봉 상태에 맞는 이미지 적용
+  const p = papers[currentPaper] || { front: null, back: null, open: null };
+  frontImg = openMode ? (p.open || p.front) : p.front;
+  backImg = openMode ? null : p.back;
+  applyPaperImages();
+}
+
 function saveCurrentPaperState() {
   paperStates.set(currentPaper, {
     facets: structuredClone(facets),
     undo: structuredClone(undoStack),
-    paperW, frontImg, backImg,
+    paperW, frontImg, backImg, openMode,
   });
+}
+
+function syncOpenBtn() {
+  if (!btnOpen) return;
+  const p = papers[currentPaper];
+  btnOpen.classList.toggle('hidden', !p?.open);
+  btnOpen.textContent = openMode ? '📦 닫기' : '📦 개봉';
 }
 
 function switchPaper(idx, initial = false) {
@@ -1167,30 +1184,49 @@ function switchPaper(idx, initial = false) {
     for (const u of st.undo) undoStack.push(u);
     paperW = st.paperW; paperH = BASE_H;
     frontImg = st.frontImg; backImg = st.backImg;
+    openMode = st.openMode ?? false;
   } else {
-    const p = papers[idx] || { front: null, back: null };
-    frontImg = p.front; backImg = p.back;
-    applyPaperImages();
+    openMode = false;
+    applyModeImages();
     facets = [initialFacet()];
     undoStack.length = 0;
   }
   selectedPiece = null;
   rebuildTextures();
   rebuildScene();
-  for (let i = 0; i < paperBar.children.length; i++) {
+  for (let i = 0; i < papers.length && i < paperBar.children.length; i++) {
     paperBar.children[i].classList.toggle('active', i === idx);
   }
+  syncOpenBtn();
+}
+
+function toggleOpen() {
+  openMode = !openMode;
+  applyModeImages();
+  facets = [initialFacet()];
+  undoStack.length = 0;
+  selectedPiece = null;
+  rebuildTextures();
+  rebuildScene();
+  syncOpenBtn();
+  setHint(openMode ? '내용물을 꺼냈어요 — 📦 닫기로 되돌릴 수 있어요' : HINTS[mode] || HINTS.view);
 }
 
 function buildPaperBar() {
   paperBar.innerHTML = '';
-  paperBar.classList.toggle('hidden', papers.length <= 1);
+  const anyOpen = papers.some(p => p.open);
+  paperBar.classList.toggle('hidden', papers.length <= 1 && !anyOpen);
   papers.forEach((_, i) => {
     const b = document.createElement('button');
     b.textContent = `정보 ${i + 1}`;
     b.addEventListener('click', () => switchPaper(i));
     paperBar.appendChild(b);
   });
+  btnOpen = document.createElement('button');
+  btnOpen.className = 'openBtn hidden';
+  btnOpen.textContent = '📦 개봉';
+  btnOpen.addEventListener('click', toggleOpen);
+  paperBar.appendChild(btnOpen);
 }
 
 (async function discoverPapers() {
@@ -1208,8 +1244,9 @@ function buildPaperBar() {
   const results = await Promise.all(Array.from({ length: 12 }, (_, i) => Promise.all([
     tryImg(exts.map(e => `assets/${i + 1}-front.${e}`)),
     tryImg(exts.map(e => `assets/${i + 1}-back.${e}`)),
+    tryImg(exts.map(e => `assets/${i + 1}-open.${e}`)),
   ])));
-  papers = results.filter(([f]) => f).map(([f, b]) => ({ front: f, back: b }));
+  papers = results.filter(([f]) => f).map(([f, b, o]) => ({ front: f, back: b, open: o }));
   if (!papers.length) { // 구버전 호환: front.* / back.*
     const [f, b] = await Promise.all([
       tryImg(exts.map(e => `assets/front.${e}`)),
