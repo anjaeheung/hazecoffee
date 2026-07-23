@@ -1020,6 +1020,14 @@ function fitOverlayToPaper() { // 종이에 끼운 것처럼 정확히 겹치기
   updateOverlayMesh();
 }
 function setOverlaySrc(idx) {
+  if (overlay && overlay.srcIdx === idx) { // 같은 번호를 다시 누르면 치우기
+    removeOverlayMesh();
+    overlay = null; ovDrag = null;
+    for (const b of overlaySrcs.children) b.classList.remove('active');
+    setControlsForTool(false);
+    setHint('겹쳐 볼 자료의 번호를 선택하세요');
+    return;
+  }
   const img = papers[idx].front;
   const h = 22;
   overlay = {
