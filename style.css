@@ -8,12 +8,20 @@ html, body {
   touch-action: none;
 }
 
-#view { position: fixed; inset: 0; display: block; }
+#view { position: fixed; inset: 0; display: block; touch-action: none; }
+
+#topbars {
+  position: fixed;
+  top: 8px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  z-index: 10;
+  width: calc(100vw - 10px);
+  pointer-events: none; /* 빈 영역은 3D 조작을 막지 않게 */
+}
+#topbars > * { pointer-events: auto; }
 
 #toolbar {
-  position: fixed;
-  top: 10px; left: 50%;
-  transform: translateX(-50%);
   display: flex; gap: 6px; align-items: center;
   flex-wrap: wrap; justify-content: center;
   padding: 8px 10px;
@@ -21,8 +29,7 @@ html, body {
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 14px;
   backdrop-filter: blur(8px);
-  z-index: 10;
-  max-width: calc(100vw - 16px);
+  max-width: 100%;
 }
 
 #toolbar button {
@@ -42,9 +49,6 @@ html, body {
 #toolbar .sep { width: 1px; height: 22px; background: rgba(255,255,255,0.15); margin: 0 3px; }
 
 #paperBar {
-  position: fixed;
-  top: 62px; left: 50%;
-  transform: translateX(-50%);
   display: flex; gap: 6px;
   flex-wrap: wrap; justify-content: center;
   padding: 6px 8px;
@@ -52,8 +56,7 @@ html, body {
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: 12px;
   backdrop-filter: blur(8px);
-  z-index: 9;
-  max-width: calc(100vw - 16px);
+  max-width: 100%;
 }
 #paperBar.hidden { display: none; }
 #paperBar button {

@@ -1376,6 +1376,11 @@ function enterSpread() {
   spreadGroup.visible = true;
   spreadAnim = { t0: performance.now() };
   alignTopDown();
+  // 세로 화면(폰)에서도 퍼진 자료가 전부 보이도록 카메라 거리를 화면 비율에 맞춤
+  if (flipAnim) {
+    const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    flipAnim.r = Math.max(52, 23 / t, 32 / (t * camera.aspect));
+  }
   updatePaperBarUI();
   syncOpenBtn();
   setHint('자료를 클릭하면 자세히 볼 수 있어요');
